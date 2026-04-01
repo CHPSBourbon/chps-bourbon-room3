@@ -9,16 +9,19 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { Switch } from "@/components/ui/switch";
-import { Plus, MapPin, Clock, Users, Wine, CalendarDays, Check, HelpCircle, AlertCircle } from "lucide-react";
+import { useAuthContext } from "@/App";
+import { Plus, MapPin, Clock, Users, Wine, CalendarDays, Check, HelpCircle, AlertCircle, LogIn, UserPlus, Lock } from "lucide-react";
 import { format, parseISO, isAfter, isBefore } from "date-fns";
+
+const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 
 export default function Events() {
   const { toast } = useToast();
+  const auth = useAuthContext();
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [rsvpDialog, setRsvpDialog] = useState<ClubEvent | null>(null);
+  const [authDialog, setAuthDialog] = useState<{ eventId: number } | null>(null);
   const [capEnabled, setCapEnabled] = useState(false);
   const [formData, setFormData] = useState({
     title: "",
@@ -56,18 +59,42 @@ export default function Events() {
   });
 
   const rsvpMutation = useMutation({
-    mutationFn: async ({ eventId, memberId, status }: { eventId: number; memberId: number; status: string }) => {
-      const res = await apiRequest("POST", `/api/events/${eventId}/rsvps`, { memberId, status });
+    mutationFn: async ({ eventId, status }: { eventId: number; status: string }) => {
+      const res = await fetch(`${API_BASE}/api/events/${eventId}/rsvps`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.message || "RSVP failed");
+      }
       return res.json();
     },
     onSuccess: (data: Record<string, unknown>, variables) => {
       queryClient.invalidateQueries({ queryKey: ["/api/events", variables.eventId, "rsvps"] });
-      setRsvpDialog(null);
       if (data._waitlisted) {
         toast({ title: "Added to waitlist", description: "This event is full. You've been placed on the waitlist." });
       } else {
         toast({ title: "RSVP recorded" });
       }
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const cancelRsvpMutation = useMutation({
+    mutationFn: async (eventId: number) => {
+      const res = await fetch(`${API_BASE}/api/events/${eventId}/rsvps`, { method: "DELETE" });
+      if (!res.ok && res.status !== 204) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.message || "Failed to cancel RSVP");
+      }
+    },
+    onSuccess: (_data, eventId) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/events", eventId, "rsvps"] });
+      toast({ title: "RSVP cancelled" });
     },
     onError: (err: Error) => {
       toast({ title: "Error", description: err.message, variant: "destructive" });
@@ -118,7 +145,6 @@ export default function Events() {
             <form
               onSubmit={(e) => {
                 e.preventDefault();
-                const adminMember = members.find((m) => m.role === "admin") || members[0];
                 createMutation.mutate({
                   title: formData.title,
                   description: formData.description || null,
@@ -127,7 +153,7 @@ export default function Events() {
                   location: formData.location,
                   featuredBourbon: formData.featuredBourbon || null,
                   maxAttendees: formData.maxAttendees ? Number(formData.maxAttendees) : null,
-                  createdBy: adminMember?.id || 1,
+                  createdBy: auth.member?.id || 1,
                   createdAt: new Date().toISOString(),
                 });
               }}
@@ -190,8 +216,8 @@ export default function Events() {
         </Dialog>
       </div>
 
-      {/* RSVP Dialog */}
-      <RsvpDialog event={rsvpDialog} members={members} onClose={() => setRsvpDialog(null)} rsvpMutation={rsvpMutation} />
+      {/* Auth Dialog for RSVP */}
+      <AuthDialog open={!!authDialog} onClose={() => setAuthDialog(null)} auth={auth} />
 
       {/* Upcoming Events */}
       <div>
@@ -208,7 +234,22 @@ export default function Events() {
         ) : (
           <div className="space-y-3">
             {upcoming.map((event) => (
-              <EventCard key={event.id} event={event} members={members} onRsvp={() => setRsvpDialog(event)} />
+              <EventCard
+                key={event.id}
+                event={event}
+                members={members}
+                currentMemberId={auth.member?.id}
+                onRsvp={(status) => {
+                  if (!auth.member) {
+                    setAuthDialog({ eventId: event.id });
+                    return;
+                  }
+                  rsvpMutation.mutate({ eventId: event.id, status });
+                }}
+                onCancel={() => cancelRsvpMutation.mutate(event.id)}
+                rsvpPending={rsvpMutation.isPending}
+                cancelPending={cancelRsvpMutation.isPending}
+              />
             ))}
           </div>
         )}
@@ -231,89 +272,111 @@ export default function Events() {
   );
 }
 
-function RsvpDialog({
-  event,
-  members,
+// Auth dialog — login or register to RSVP
+function AuthDialog({
+  open,
   onClose,
-  rsvpMutation,
+  auth,
 }: {
-  event: ClubEvent | null;
-  members: Member[];
+  open: boolean;
   onClose: () => void;
-  rsvpMutation: ReturnType<typeof useMutation<Record<string, unknown>, Error, { eventId: number; memberId: number; status: string }>>;
+  auth: ReturnType<typeof useAuthContext>;
 }) {
-  const [selectedMember, setSelectedMember] = useState("");
-  const [rsvpStatus, setRsvpStatus] = useState("going");
+  const { toast } = useToast();
+  const [mode, setMode] = useState<"login" | "register">("login");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [favoriteBourbons, setFavoriteBourbons] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  const { data: rsvps = [] } = useQuery<Rsvp[]>({
-    queryKey: ["/api/events", event?.id, "rsvps"],
-    enabled: !!event,
-  });
+  const reset = () => {
+    setEmail("");
+    setPassword("");
+    setName("");
+    setPhone("");
+    setFavoriteBourbons("");
+    setMode("login");
+  };
 
-  const goingCount = rsvps.filter((r) => r.status === "going").length;
-  const waitlistCount = rsvps.filter((r) => r.status === "waitlist").length;
-  const isFull = event?.maxAttendees ? goingCount >= event.maxAttendees : false;
-  const spotsLeft = event?.maxAttendees ? Math.max(0, event.maxAttendees - goingCount) : null;
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    try {
+      if (mode === "login") {
+        await auth.login(email, password);
+        toast({ title: `Welcome back` });
+      } else {
+        await auth.register({ name, email, password, phone: phone || undefined, favoriteBourbons: favoriteBourbons || undefined });
+        toast({ title: "Account created", description: "You can now RSVP to events." });
+      }
+      reset();
+      onClose();
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
-    <Dialog open={!!event} onOpenChange={() => { onClose(); setSelectedMember(""); setRsvpStatus("going"); }}>
+    <Dialog open={open} onOpenChange={() => { onClose(); reset(); }}>
       <DialogContent className="sm:max-w-sm">
         <DialogHeader>
-          <DialogTitle className="font-serif">RSVP to {event?.title}</DialogTitle>
+          <DialogTitle className="font-serif">
+            {mode === "login" ? "Sign in to RSVP" : "Create an Account"}
+          </DialogTitle>
         </DialogHeader>
-        {event?.maxAttendees && (
-          <div className={`flex items-center gap-2 rounded-md px-3 py-2 text-xs ${isFull ? "bg-amber-500/10 text-amber-400" : "bg-muted/50 text-muted-foreground"}`} data-testid="rsvp-capacity-info">
-            <Users className="w-3.5 h-3.5 flex-shrink-0" />
-            {isFull ? (
-              <span>Event is full ({goingCount}/{event.maxAttendees}). Selecting "Going" will add you to the waitlist{waitlistCount > 0 ? ` (${waitlistCount} waiting)` : ""}.</span>
-            ) : (
-              <span>{spotsLeft} {spotsLeft === 1 ? "spot" : "spots"} remaining ({goingCount}/{event.maxAttendees})</span>
-            )}
-          </div>
-        )}
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (event && selectedMember) {
-              rsvpMutation.mutate(
-                { eventId: event.id, memberId: Number(selectedMember), status: rsvpStatus },
-                { onSuccess: () => { setSelectedMember(""); setRsvpStatus("going"); } }
-              );
-            }
-          }}
-          className="space-y-4 mt-2"
-        >
+        <form onSubmit={handleSubmit} className="space-y-4 mt-2">
+          {mode === "register" && (
+            <>
+              <div>
+                <Label htmlFor="auth-name">Name</Label>
+                <Input id="auth-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Your name" required data-testid="input-auth-name" />
+              </div>
+            </>
+          )}
           <div>
-            <Label>Member</Label>
-            <Select value={selectedMember} onValueChange={setSelectedMember}>
-              <SelectTrigger data-testid="select-rsvp-member">
-                <SelectValue placeholder="Select a member" />
-              </SelectTrigger>
-              <SelectContent>
-                {members.map((m) => (
-                  <SelectItem key={m.id} value={String(m.id)}>
-                    {m.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <Label htmlFor="auth-email">Email</Label>
+            <Input id="auth-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" required data-testid="input-auth-email" />
           </div>
           <div>
-            <Label>Status</Label>
-            <Select value={rsvpStatus} onValueChange={setRsvpStatus}>
-              <SelectTrigger data-testid="select-rsvp-status">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="going">{isFull ? "Going (Waitlist)" : "Going"}</SelectItem>
-                <SelectItem value="maybe">Maybe</SelectItem>
-                <SelectItem value="not_going">Not Going</SelectItem>
-              </SelectContent>
-            </Select>
+            <Label htmlFor="auth-password">Password</Label>
+            <Input id="auth-password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder={mode === "register" ? "At least 6 characters" : "••••••••"} required data-testid="input-auth-password" />
           </div>
-          <Button type="submit" className="w-full" disabled={rsvpMutation.isPending || !selectedMember} data-testid="button-submit-rsvp">
-            {rsvpMutation.isPending ? "Saving..." : isFull && rsvpStatus === "going" ? "Join Waitlist" : "Submit RSVP"}
+          {mode === "register" && (
+            <>
+              <div>
+                <Label htmlFor="auth-phone">Phone (optional)</Label>
+                <Input id="auth-phone" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="(555) 123-4567" data-testid="input-auth-phone" />
+              </div>
+              <div>
+                <Label htmlFor="auth-bourbons">Favorite Bourbons (optional)</Label>
+                <Input id="auth-bourbons" value={favoriteBourbons} onChange={(e) => setFavoriteBourbons(e.target.value)} placeholder="Buffalo Trace, Maker's Mark..." data-testid="input-auth-bourbons" />
+              </div>
+            </>
+          )}
+          <Button type="submit" className="w-full" disabled={loading} data-testid="button-auth-submit">
+            {loading ? (mode === "login" ? "Signing in..." : "Creating account...") : mode === "login" ? "Sign In" : "Create Account"}
           </Button>
+          <p className="text-center text-xs text-muted-foreground">
+            {mode === "login" ? (
+              <>
+                Don't have an account?{" "}
+                <button type="button" className="text-primary hover:underline" onClick={() => setMode("register")} data-testid="button-switch-register">
+                  Sign up
+                </button>
+              </>
+            ) : (
+              <>
+                Already have an account?{" "}
+                <button type="button" className="text-primary hover:underline" onClick={() => setMode("login")} data-testid="button-switch-login">
+                  Sign in
+                </button>
+              </>
+            )}
+          </p>
         </form>
       </DialogContent>
     </Dialog>
@@ -324,12 +387,20 @@ function EventCard({
   event,
   members,
   isPast,
+  currentMemberId,
   onRsvp,
+  onCancel,
+  rsvpPending,
+  cancelPending,
 }: {
   event: ClubEvent;
   members: Member[];
   isPast?: boolean;
-  onRsvp?: () => void;
+  currentMemberId?: number;
+  onRsvp?: (status: string) => void;
+  onCancel?: () => void;
+  rsvpPending?: boolean;
+  cancelPending?: boolean;
 }) {
   const { data: rsvps = [] } = useQuery<Rsvp[]>({
     queryKey: ["/api/events", event.id, "rsvps"],
@@ -340,6 +411,15 @@ function EventCard({
   const waitlistCount = rsvps.filter((r) => r.status === "waitlist").length;
   const isFull = event.maxAttendees ? goingCount >= event.maxAttendees : false;
   const spotsLeft = event.maxAttendees ? Math.max(0, event.maxAttendees - goingCount) : null;
+
+  // Current user's RSVP status
+  const myRsvp = currentMemberId ? rsvps.find((r) => r.memberId === currentMemberId) : null;
+
+  // Get names of going members
+  const goingMembers = rsvps
+    .filter((r) => r.status === "going")
+    .map((r) => members.find((m) => m.id === r.memberId)?.name)
+    .filter(Boolean);
 
   return (
     <Card className="bg-card border-card-border" data-testid={`card-event-${event.id}`}>
@@ -409,12 +489,62 @@ function EventCard({
                   </span>
                 )}
               </div>
+              {/* Show who's going */}
+              {goingMembers.length > 0 && (
+                <p className="text-[11px] text-muted-foreground/70 mt-1.5">
+                  {goingMembers.slice(0, 5).join(", ")}
+                  {goingMembers.length > 5 ? ` +${goingMembers.length - 5} more` : ""}
+                </p>
+              )}
             </div>
           </div>
+          {/* RSVP buttons */}
           {!isPast && onRsvp && (
-            <Button size="sm" variant="outline" onClick={onRsvp} className="flex-shrink-0" data-testid={`button-rsvp-${event.id}`}>
-              {isFull ? "Waitlist" : "RSVP"}
-            </Button>
+            <div className="flex flex-col gap-1.5 flex-shrink-0">
+              {myRsvp ? (
+                <>
+                  <Badge
+                    variant={myRsvp.status === "going" ? "default" : myRsvp.status === "waitlist" ? "secondary" : "outline"}
+                    className={`text-[10px] justify-center ${myRsvp.status === "waitlist" ? "bg-amber-500/15 text-amber-400 border-0" : ""}`}
+                  >
+                    {myRsvp.status === "going" ? "Going" : myRsvp.status === "maybe" ? "Maybe" : myRsvp.status === "waitlist" ? "Waitlisted" : myRsvp.status}
+                  </Badge>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 text-[10px] text-muted-foreground"
+                    onClick={onCancel}
+                    disabled={cancelPending}
+                    data-testid={`button-cancel-rsvp-${event.id}`}
+                  >
+                    {cancelPending ? "..." : "Cancel"}
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <Button
+                    size="sm"
+                    variant="default"
+                    className="h-8"
+                    onClick={() => onRsvp("going")}
+                    disabled={rsvpPending}
+                    data-testid={`button-rsvp-going-${event.id}`}
+                  >
+                    {isFull ? "Waitlist" : "Going"}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 text-[10px] text-muted-foreground"
+                    onClick={() => onRsvp("maybe")}
+                    disabled={rsvpPending}
+                    data-testid={`button-rsvp-maybe-${event.id}`}
+                  >
+                    Maybe
+                  </Button>
+                </>
+              )}
+            </div>
           )}
         </div>
       </CardContent>

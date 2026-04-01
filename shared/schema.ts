@@ -8,10 +8,11 @@ export const members = sqliteTable("members", {
   email: text("email").notNull().unique(),
   phone: text("phone"),
   bio: text("bio"),
-  favoriteBourbons: text("favorite_bourbons"), // JSON array stored as text
+  favoriteBourbons: text("favorite_bourbons"),
   role: text("role").notNull().default("member"), // "admin" | "member"
   joinedAt: text("joined_at").notNull(),
   avatarColor: text("avatar_color").notNull().default("#C8A951"),
+  passwordHash: text("password_hash"),
 });
 
 export const events = sqliteTable("events", {
@@ -31,10 +32,17 @@ export const rsvps = sqliteTable("rsvps", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   eventId: integer("event_id").notNull(),
   memberId: integer("member_id").notNull(),
-  status: text("status").notNull().default("going"), // "going" | "maybe" | "not_going"
+  status: text("status").notNull().default("going"),
 });
 
-export const insertMemberSchema = createInsertSchema(members).omit({ id: true }).extend({
+export const adminUsers = sqliteTable("admin_users", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  email: text("email").notNull().unique(),
+  passwordHash: text("password_hash").notNull(),
+  name: text("name").notNull(),
+});
+
+export const insertMemberSchema = createInsertSchema(members).omit({ id: true, passwordHash: true }).extend({
   name: z.string().min(1, "Name is required"),
   email: z.string().email("Valid email required"),
 });
@@ -44,13 +52,6 @@ export const insertEventSchema = createInsertSchema(events).omit({ id: true }).e
   location: z.string().min(1, "Location is required"),
   date: z.string().min(1, "Date is required"),
   time: z.string().min(1, "Time is required"),
-});
-
-export const adminUsers = sqliteTable("admin_users", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  email: text("email").notNull().unique(),
-  passwordHash: text("password_hash").notNull(),
-  name: text("name").notNull(),
 });
 
 export const insertRsvpSchema = createInsertSchema(rsvps).omit({ id: true });

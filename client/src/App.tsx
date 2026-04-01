@@ -1,3 +1,4 @@
+import { createContext, useContext } from "react";
 import { Switch, Route, Router } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
 import { queryClient } from "./lib/queryClient";
@@ -11,6 +12,17 @@ import Members from "@/pages/members";
 import Events from "@/pages/events";
 import Admin from "@/pages/admin";
 import NotFound from "@/pages/not-found";
+import { useAuth, type MemberSession } from "@/hooks/use-auth";
+
+type AuthContextType = ReturnType<typeof useAuth>;
+
+const AuthContext = createContext<AuthContextType | null>(null);
+
+export function useAuthContext() {
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error("useAuthContext must be used within AuthProvider");
+  return ctx;
+}
 
 function AppRouter() {
   return (
@@ -30,27 +42,31 @@ const sidebarStyle = {
 };
 
 function App() {
+  const auth = useAuth();
+
   return (
-    <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <Router hook={useHashLocation}>
-          <SidebarProvider style={sidebarStyle as React.CSSProperties}>
-            <div className="flex h-screen w-full">
-              <AppSidebar />
-              <div className="flex flex-col flex-1 min-w-0">
-                <header className="flex items-center h-12 px-3 border-b border-border bg-background/80 backdrop-blur-sm flex-shrink-0">
-                  <SidebarTrigger data-testid="button-sidebar-toggle" />
-                </header>
-                <main className="flex-1 overflow-auto">
-                  <AppRouter />
-                </main>
+    <AuthContext.Provider value={auth}>
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <Router hook={useHashLocation}>
+            <SidebarProvider style={sidebarStyle as React.CSSProperties}>
+              <div className="flex h-screen w-full">
+                <AppSidebar />
+                <div className="flex flex-col flex-1 min-w-0">
+                  <header className="flex items-center h-12 px-3 border-b border-border bg-background/80 backdrop-blur-sm flex-shrink-0">
+                    <SidebarTrigger data-testid="button-sidebar-toggle" />
+                  </header>
+                  <main className="flex-1 overflow-auto">
+                    <AppRouter />
+                  </main>
+                </div>
               </div>
-            </div>
-          </SidebarProvider>
-        </Router>
-        <Toaster />
-      </TooltipProvider>
-    </QueryClientProvider>
+            </SidebarProvider>
+          </Router>
+          <Toaster />
+        </TooltipProvider>
+      </QueryClientProvider>
+    </AuthContext.Provider>
   );
 }
 

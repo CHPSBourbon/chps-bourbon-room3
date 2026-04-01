@@ -39,7 +39,8 @@ sqlite.exec(`
     favorite_bourbons TEXT,
     role TEXT NOT NULL DEFAULT 'member',
     joined_at TEXT NOT NULL,
-    avatar_color TEXT NOT NULL DEFAULT '#C8A951'
+    avatar_color TEXT NOT NULL DEFAULT '#C8A951',
+    password_hash TEXT
   );
   CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -67,6 +68,13 @@ sqlite.exec(`
   );
 `);
 
+// Migration: add password_hash column if missing (for existing databases)
+try {
+  sqlite.exec(`ALTER TABLE members ADD COLUMN password_hash TEXT`);
+} catch {
+  // Column already exists
+}
+
 export const db = drizzle(sqlite);
 
 export interface IStorage {
@@ -74,8 +82,8 @@ export interface IStorage {
   getAllMembers(): Promise<Member[]>;
   getMember(id: number): Promise<Member | undefined>;
   getMemberByEmail(email: string): Promise<Member | undefined>;
-  createMember(member: InsertMember): Promise<Member>;
-  updateMember(id: number, data: Partial<InsertMember>): Promise<Member | undefined>;
+  createMember(member: InsertMember & { passwordHash?: string | null }): Promise<Member>;
+  updateMember(id: number, data: Partial<InsertMember & { passwordHash?: string | null }>): Promise<Member | undefined>;
   deleteMember(id: number): Promise<void>;
 
   // Events
@@ -112,11 +120,11 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(members).where(eq(members.email, email)).get();
   }
 
-  async createMember(member: InsertMember): Promise<Member> {
+  async createMember(member: InsertMember & { passwordHash?: string | null }): Promise<Member> {
     return db.insert(members).values(member).returning().get();
   }
 
-  async updateMember(id: number, data: Partial<InsertMember>): Promise<Member | undefined> {
+  async updateMember(id: number, data: Partial<InsertMember & { passwordHash?: string | null }>): Promise<Member | undefined> {
     return db.update(members).set(data).where(eq(members.id, id)).returning().get();
   }
 
