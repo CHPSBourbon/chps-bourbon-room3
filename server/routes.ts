@@ -26,7 +26,8 @@ export async function registerRoutes(
     const existing = await storage.getMemberByEmail(parsed.data.email);
     if (existing) return res.status(409).json({ message: "Email already registered" });
 
-    const member = await storage.createMember(parsed.data);
+    // Force role to "member" — only admins can promote via PATCH
+    const member = await storage.createMember({ ...parsed.data, role: "member" });
     res.status(201).json(member);
   });
 
