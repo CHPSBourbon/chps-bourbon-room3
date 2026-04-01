@@ -225,7 +225,8 @@ export async function registerRoutes(
     res.json(event);
   });
 
-  app.post("/api/events", async (req, res) => {
+  // Protected: only admins can create events
+  app.post("/api/events", requireAdmin, async (req, res) => {
     const parsed = insertEventSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ message: parsed.error.message });
 

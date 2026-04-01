@@ -198,7 +198,9 @@ export class DatabaseStorage implements IStorage {
 
 export const storage = new DatabaseStorage();
 
-// Seed admin accounts on startup
+const AVATAR_COLORS = ["#C8A951", "#8B6914", "#D4A76A", "#B8860B", "#A0522D", "#CD853F", "#DAA520", "#BC8F8F"];
+
+// Seed admin accounts + member profiles on startup
 async function seedAdminUsers() {
   const admins = [
     { email: "drew@palmettostarconstruction.com", name: "Drew" },
@@ -208,11 +210,30 @@ async function seedAdminUsers() {
   ];
 
   for (const admin of admins) {
+    // Seed admin_users table
     const existing = await storage.getAdminUserByEmail(admin.email);
     if (!existing) {
       const hash = await hashPassword("password123");
       await storage.createAdminUser(admin.email, hash, admin.name);
       console.log(`Seeded admin: ${admin.email}`);
+    }
+
+    // Also ensure each admin has a member profile so they can RSVP
+    const existingMember = await storage.getMemberByEmail(admin.email);
+    if (!existingMember) {
+      const hash = await hashPassword("password123");
+      await storage.createMember({
+        name: admin.name,
+        email: admin.email,
+        phone: null,
+        bio: null,
+        favoriteBourbons: null,
+        role: "admin",
+        joinedAt: new Date().toISOString().split("T")[0],
+        avatarColor: AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)],
+        passwordHash: hash,
+      });
+      console.log(`Seeded member profile for admin: ${admin.email}`);
     }
   }
 }

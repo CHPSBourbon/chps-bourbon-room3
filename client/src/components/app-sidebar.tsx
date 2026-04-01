@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Users, CalendarDays, LayoutDashboard, Settings, Wine, LogOut, KeyRound, LogIn } from "lucide-react";
+import { Users, CalendarDays, LayoutDashboard, Settings, Wine, LogOut, KeyRound, LogIn, UserPlus } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import {
   Sidebar,
@@ -29,9 +29,10 @@ const navItems = [
 
 export function AppSidebar() {
   const [location] = useLocation();
-  const { member, logout } = useAuthContext();
+  const auth = useAuthContext();
   const { toast } = useToast();
   const [pwDialog, setPwDialog] = useState(false);
+  const [authDialog, setAuthDialog] = useState(false);
 
   return (
     <Sidebar>
@@ -75,15 +76,15 @@ export function AppSidebar() {
         </SidebarGroup>
       </SidebarContent>
       <SidebarFooter className="p-4 border-t border-sidebar-border">
-        {member ? (
+        {auth.member ? (
           <div className="space-y-2">
             <div className="flex items-center gap-2">
               <div className="w-7 h-7 rounded-full bg-primary/15 flex items-center justify-center text-xs font-semibold text-primary">
-                {member.name.charAt(0).toUpperCase()}
+                {auth.member.name.charAt(0).toUpperCase()}
               </div>
               <div className="min-w-0 flex-1">
-                <p className="text-xs font-medium truncate">{member.name}</p>
-                <p className="text-[10px] text-muted-foreground truncate">{member.email}</p>
+                <p className="text-xs font-medium truncate">{auth.member.name}</p>
+                <p className="text-[10px] text-muted-foreground truncate">{auth.member.email}</p>
               </div>
             </div>
             <div className="flex gap-1">
@@ -102,7 +103,7 @@ export function AppSidebar() {
                 variant="ghost"
                 className="h-7 flex-1 text-[10px] gap-1 text-muted-foreground"
                 onClick={async () => {
-                  await logout();
+                  await auth.logout();
                   toast({ title: "Signed out" });
                 }}
                 data-testid="button-member-logout"
@@ -113,22 +114,143 @@ export function AppSidebar() {
             </div>
           </div>
         ) : (
-          <Link href="/events">
+          <div className="flex gap-1">
             <Button
               size="sm"
               variant="ghost"
-              className="w-full h-8 text-xs gap-1.5 text-muted-foreground"
+              className="h-8 flex-1 text-xs gap-1.5 text-muted-foreground"
+              onClick={() => setAuthDialog(true)}
               data-testid="button-sign-in-prompt"
             >
               <LogIn className="w-3.5 h-3.5" />
-              Sign in to RSVP
+              Sign in
             </Button>
-          </Link>
+            <Button
+              size="sm"
+              variant="default"
+              className="h-8 flex-1 text-xs gap-1.5"
+              onClick={() => setAuthDialog(true)}
+              data-testid="button-sign-up-prompt"
+            >
+              <UserPlus className="w-3.5 h-3.5" />
+              Sign up
+            </Button>
+          </div>
         )}
       </SidebarFooter>
 
       <ChangePasswordDialog open={pwDialog} onClose={() => setPwDialog(false)} />
+      <AuthDialog open={authDialog} onClose={() => setAuthDialog(false)} auth={auth} />
     </Sidebar>
+  );
+}
+
+// Auth dialog — login or register
+function AuthDialog({
+  open,
+  onClose,
+  auth,
+}: {
+  open: boolean;
+  onClose: () => void;
+  auth: ReturnType<typeof useAuthContext>;
+}) {
+  const { toast } = useToast();
+  const [mode, setMode] = useState<"login" | "register">("login");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [favoriteBourbons, setFavoriteBourbons] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const reset = () => {
+    setEmail("");
+    setPassword("");
+    setName("");
+    setPhone("");
+    setFavoriteBourbons("");
+    setMode("login");
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    try {
+      if (mode === "login") {
+        await auth.login(email, password);
+        toast({ title: "Welcome back" });
+      } else {
+        await auth.register({ name, email, password, phone: phone || undefined, favoriteBourbons: favoriteBourbons || undefined });
+        toast({ title: "Account created", description: "You can now RSVP to events." });
+      }
+      reset();
+      onClose();
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={() => { onClose(); reset(); }}>
+      <DialogContent className="sm:max-w-sm">
+        <DialogHeader>
+          <DialogTitle className="font-serif">
+            {mode === "login" ? "Sign In" : "Create an Account"}
+          </DialogTitle>
+        </DialogHeader>
+        <form onSubmit={handleSubmit} className="space-y-4 mt-2">
+          {mode === "register" && (
+            <div>
+              <Label htmlFor="sidebar-auth-name">Name</Label>
+              <Input id="sidebar-auth-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Your name" required data-testid="input-sidebar-auth-name" />
+            </div>
+          )}
+          <div>
+            <Label htmlFor="sidebar-auth-email">Email</Label>
+            <Input id="sidebar-auth-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" required data-testid="input-sidebar-auth-email" />
+          </div>
+          <div>
+            <Label htmlFor="sidebar-auth-password">Password</Label>
+            <Input id="sidebar-auth-password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder={mode === "register" ? "At least 6 characters" : "••••••••"} required data-testid="input-sidebar-auth-password" />
+          </div>
+          {mode === "register" && (
+            <>
+              <div>
+                <Label htmlFor="sidebar-auth-phone">Phone (optional)</Label>
+                <Input id="sidebar-auth-phone" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="(555) 123-4567" data-testid="input-sidebar-auth-phone" />
+              </div>
+              <div>
+                <Label htmlFor="sidebar-auth-bourbons">Favorite Bourbons (optional)</Label>
+                <Input id="sidebar-auth-bourbons" value={favoriteBourbons} onChange={(e) => setFavoriteBourbons(e.target.value)} placeholder="Buffalo Trace, Maker's Mark..." data-testid="input-sidebar-auth-bourbons" />
+              </div>
+            </>
+          )}
+          <Button type="submit" className="w-full" disabled={loading} data-testid="button-sidebar-auth-submit">
+            {loading ? (mode === "login" ? "Signing in..." : "Creating account...") : mode === "login" ? "Sign In" : "Create Account"}
+          </Button>
+          <p className="text-center text-xs text-muted-foreground">
+            {mode === "login" ? (
+              <>
+                Don't have an account?{" "}
+                <button type="button" className="text-primary hover:underline" onClick={() => setMode("register")} data-testid="button-sidebar-switch-register">
+                  Sign up
+                </button>
+              </>
+            ) : (
+              <>
+                Already have an account?{" "}
+                <button type="button" className="text-primary hover:underline" onClick={() => setMode("login")} data-testid="button-sidebar-switch-login">
+                  Sign in
+                </button>
+              </>
+            )}
+          </p>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 

@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import {
   AlertDialog,
@@ -19,9 +20,9 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { Shield, ShieldOff, Trash2, Users, CalendarDays, Settings2, LogOut, KeyRound, Lock } from "lucide-react";
+import { Shield, ShieldOff, Trash2, Users, CalendarDays, Settings2, LogOut, KeyRound, Lock, Plus } from "lucide-react";
 
 // Admin auth state — stored in React state (no localStorage in sandbox)
 type AdminSession = { id: number; email: string; name: string } | null;
@@ -165,6 +166,12 @@ function AdminPanel({ session, onLogout }: { session: NonNullable<AdminSession>;
   const { toast } = useToast();
   const [capDialog, setCapDialog] = useState<ClubEvent | null>(null);
   const [passwordDialog, setPasswordDialog] = useState(false);
+  const [createEventOpen, setCreateEventOpen] = useState(false);
+  const [capEnabled, setCapEnabled] = useState(false);
+  const [eventForm, setEventForm] = useState({
+    title: "", description: "", date: "", time: "",
+    location: "", featuredBourbon: "", maxAttendees: "",
+  });
 
   const { data: members = [], isLoading: membersLoading } = useQuery<Member[]>({
     queryKey: ["/api/members"],
@@ -212,6 +219,27 @@ function AdminPanel({ session, onLogout }: { session: NonNullable<AdminSession>;
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/events"] });
       toast({ title: "Event deleted" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const createEventMutation = useMutation({
+    mutationFn: async (data: Record<string, unknown>) => {
+      const res = await apiRequest("POST", "/api/events", data);
+      if (!res.ok) {
+        const d = await res.json().catch(() => null);
+        throw new Error(d?.message || "Failed to create event");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/events"] });
+      setCreateEventOpen(false);
+      setCapEnabled(false);
+      setEventForm({ title: "", description: "", date: "", time: "", location: "", featuredBourbon: "", maxAttendees: "" });
+      toast({ title: "Event created" });
     },
     onError: (err: Error) => {
       toast({ title: "Error", description: err.message, variant: "destructive" });
@@ -383,17 +411,102 @@ function AdminPanel({ session, onLogout }: { session: NonNullable<AdminSession>;
 
       {/* Event Management */}
       <div>
-        <div className="flex items-center gap-2 mb-4">
-          <CalendarDays className="w-4 h-4 text-primary" />
-          <h2 className="text-sm font-medium uppercase tracking-wide text-muted-foreground">
-            Event Management
-          </h2>
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <CalendarDays className="w-4 h-4 text-primary" />
+            <h2 className="text-sm font-medium uppercase tracking-wide text-muted-foreground">
+              Event Management
+            </h2>
+          </div>
+          <Dialog open={createEventOpen} onOpenChange={setCreateEventOpen}>
+            <DialogTrigger asChild>
+              <Button size="sm" data-testid="button-create-event">
+                <Plus className="w-4 h-4 mr-2" />
+                New Event
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="sm:max-w-md">
+              <DialogHeader>
+                <DialogTitle className="font-serif">Create Event</DialogTitle>
+              </DialogHeader>
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  createEventMutation.mutate({
+                    title: eventForm.title,
+                    description: eventForm.description || null,
+                    date: eventForm.date,
+                    time: eventForm.time,
+                    location: eventForm.location,
+                    featuredBourbon: eventForm.featuredBourbon || null,
+                    maxAttendees: eventForm.maxAttendees ? Number(eventForm.maxAttendees) : null,
+                    createdBy: session.id,
+                    createdAt: new Date().toISOString(),
+                  });
+                }}
+                className="space-y-4 mt-2"
+              >
+                <div>
+                  <Label htmlFor="evt-title">Event Title</Label>
+                  <Input id="evt-title" value={eventForm.title} onChange={(e) => setEventForm({ ...eventForm, title: e.target.value })} placeholder="Monthly Tasting" required data-testid="input-event-title" />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label htmlFor="evt-date">Date</Label>
+                    <Input id="evt-date" type="date" value={eventForm.date} onChange={(e) => setEventForm({ ...eventForm, date: e.target.value })} required data-testid="input-event-date" />
+                  </div>
+                  <div>
+                    <Label htmlFor="evt-time">Time</Label>
+                    <Input id="evt-time" type="time" value={eventForm.time} onChange={(e) => setEventForm({ ...eventForm, time: e.target.value })} required data-testid="input-event-time" />
+                  </div>
+                </div>
+                <div>
+                  <Label htmlFor="evt-location">Location</Label>
+                  <Input id="evt-location" value={eventForm.location} onChange={(e) => setEventForm({ ...eventForm, location: e.target.value })} placeholder="The Bourbon Lounge" required data-testid="input-event-location" />
+                </div>
+                <div>
+                  <Label htmlFor="evt-desc">Description (optional)</Label>
+                  <Textarea id="evt-desc" value={eventForm.description} onChange={(e) => setEventForm({ ...eventForm, description: e.target.value })} placeholder="What are we doing?" rows={2} data-testid="input-event-description" />
+                </div>
+                <div>
+                  <Label htmlFor="evt-bourbon">Featured Bourbon (optional)</Label>
+                  <Input id="evt-bourbon" value={eventForm.featuredBourbon} onChange={(e) => setEventForm({ ...eventForm, featuredBourbon: e.target.value })} placeholder="Blanton's" data-testid="input-event-bourbon" />
+                </div>
+                <div className="rounded-lg border border-card-border bg-muted/30 p-3 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <Label htmlFor="evt-cap-toggle" className="text-sm font-medium">Limit Attendance</Label>
+                      <p className="text-xs text-muted-foreground mt-0.5">Cap RSVPs and waitlist overflow</p>
+                    </div>
+                    <Switch
+                      id="evt-cap-toggle"
+                      checked={capEnabled}
+                      onCheckedChange={(checked) => {
+                        setCapEnabled(checked);
+                        if (!checked) setEventForm({ ...eventForm, maxAttendees: "" });
+                      }}
+                      data-testid="switch-cap-toggle"
+                    />
+                  </div>
+                  {capEnabled && (
+                    <div>
+                      <Label htmlFor="evt-max">Max Attendees</Label>
+                      <Input id="evt-max" type="number" min="1" value={eventForm.maxAttendees} onChange={(e) => setEventForm({ ...eventForm, maxAttendees: e.target.value })} placeholder="20" data-testid="input-event-max" />
+                    </div>
+                  )}
+                </div>
+                <Button type="submit" className="w-full" disabled={createEventMutation.isPending || (capEnabled && !eventForm.maxAttendees)} data-testid="button-submit-event">
+                  {createEventMutation.isPending ? "Creating..." : "Create Event"}
+                </Button>
+              </form>
+            </DialogContent>
+          </Dialog>
         </div>
 
         {events.length === 0 ? (
           <Card className="bg-card border-card-border">
             <CardContent className="p-6 text-center">
-              <p className="text-sm text-muted-foreground">No events to manage</p>
+              <p className="text-sm text-muted-foreground">No events yet. Create one above.</p>
             </CardContent>
           </Card>
         ) : (
