@@ -2,13 +2,12 @@ import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import type { Member, Event as ClubEvent, Rsvp } from "@shared/schema";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -22,10 +21,150 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { Shield, ShieldOff, Trash2, Users, CalendarDays, Settings2 } from "lucide-react";
+import { Shield, ShieldOff, Trash2, Users, CalendarDays, Settings2, LogOut, KeyRound, Lock } from "lucide-react";
+
+// Admin auth state — stored in React state (no localStorage in sandbox)
+type AdminSession = { id: number; email: string; name: string } | null;
 
 export default function Admin() {
   const { toast } = useToast();
+  const [adminSession, setAdminSession] = useState<AdminSession>(null);
+  const [checkedSession, setCheckedSession] = useState(false);
+
+  // Check if already logged in on mount
+  const sessionQuery = useQuery({
+    queryKey: ["/api/admin/me"],
+    queryFn: async () => {
+      try {
+        const res = await fetch(
+          ("__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__") + "/api/admin/me"
+        );
+        if (!res.ok) {
+          setCheckedSession(true);
+          return null;
+        }
+        const data = await res.json();
+        setAdminSession(data);
+        setCheckedSession(true);
+        return data;
+      } catch {
+        setCheckedSession(true);
+        return null;
+      }
+    },
+    retry: false,
+    refetchOnWindowFocus: false,
+  });
+
+  if (!checkedSession && sessionQuery.isLoading) {
+    return (
+      <div className="p-6 space-y-4">
+        <div className="h-8 w-32 bg-muted rounded animate-pulse" />
+        <div className="h-40 bg-muted rounded-lg animate-pulse" />
+      </div>
+    );
+  }
+
+  if (!adminSession) {
+    return <AdminLogin onLogin={setAdminSession} />;
+  }
+
+  return <AdminPanel session={adminSession} onLogout={() => setAdminSession(null)} />;
+}
+
+// LOGIN SCREEN
+function AdminLogin({ onLogin }: { onLogin: (session: AdminSession) => void }) {
+  const { toast } = useToast();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+
+  const loginMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch(
+        ("__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__") + "/api/admin/login",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, password }),
+        }
+      );
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.message || "Invalid email or password");
+      }
+      return res.json();
+    },
+    onSuccess: (data) => {
+      onLogin(data);
+      toast({ title: `Welcome back, ${data.name}` });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Login failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  return (
+    <div className="flex items-center justify-center min-h-[80vh] p-6">
+      <Card className="w-full max-w-sm bg-card border-card-border">
+        <CardContent className="p-6">
+          <div className="text-center mb-6">
+            <div className="w-12 h-12 rounded-full bg-primary/15 flex items-center justify-center mx-auto mb-3">
+              <Lock className="w-6 h-6 text-primary" />
+            </div>
+            <h1 className="font-serif text-xl tracking-tight" data-testid="text-admin-login-title">Admin Login</h1>
+            <p className="text-sm text-muted-foreground mt-1">Sign in to access the admin panel</p>
+          </div>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              loginMutation.mutate();
+            }}
+            className="space-y-4"
+          >
+            <div>
+              <Label htmlFor="admin-email">Email</Label>
+              <Input
+                id="admin-email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="admin@example.com"
+                required
+                data-testid="input-admin-email"
+              />
+            </div>
+            <div>
+              <Label htmlFor="admin-password">Password</Label>
+              <Input
+                id="admin-password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••"
+                required
+                data-testid="input-admin-password"
+              />
+            </div>
+            <Button
+              type="submit"
+              className="w-full"
+              disabled={loginMutation.isPending}
+              data-testid="button-admin-login"
+            >
+              {loginMutation.isPending ? "Signing in..." : "Sign In"}
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+// ADMIN PANEL (authenticated)
+function AdminPanel({ session, onLogout }: { session: NonNullable<AdminSession>; onLogout: () => void }) {
+  const { toast } = useToast();
+  const [capDialog, setCapDialog] = useState<ClubEvent | null>(null);
+  const [passwordDialog, setPasswordDialog] = useState(false);
 
   const { data: members = [], isLoading: membersLoading } = useQuery<Member[]>({
     queryKey: ["/api/members"],
@@ -38,6 +177,10 @@ export default function Admin() {
   const toggleRoleMutation = useMutation({
     mutationFn: async ({ id, newRole }: { id: number; newRole: string }) => {
       const res = await apiRequest("PATCH", `/api/members/${id}`, { role: newRole });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.message || "Failed to update role");
+      }
       return res.json();
     },
     onSuccess: () => {
@@ -78,6 +221,10 @@ export default function Admin() {
   const updateCapMutation = useMutation({
     mutationFn: async ({ id, maxAttendees }: { id: number; maxAttendees: number | null }) => {
       const res = await apiRequest("PATCH", `/api/events/${id}`, { maxAttendees });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.message || "Failed to update capacity");
+      }
       return res.json();
     },
     onSuccess: () => {
@@ -90,7 +237,16 @@ export default function Admin() {
     },
   });
 
-  const [capDialog, setCapDialog] = useState<ClubEvent | null>(null);
+  const logoutMutation = useMutation({
+    mutationFn: async () => {
+      await apiRequest("POST", "/api/admin/logout");
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/me"] });
+      onLogout();
+      toast({ title: "Logged out" });
+    },
+  });
 
   if (membersLoading || eventsLoading) {
     return (
@@ -101,17 +257,39 @@ export default function Admin() {
     );
   }
 
-  const admins = members.filter((m) => m.role === "admin");
-
   return (
     <div className="p-6 space-y-8 max-w-4xl">
-      <div>
-        <h1 className="font-serif text-xl tracking-tight" data-testid="text-page-title">
-          Admin Panel
-        </h1>
-        <p className="text-sm text-muted-foreground mt-1">
-          Manage members, roles, and events
-        </p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="font-serif text-xl tracking-tight" data-testid="text-page-title">
+            Admin Panel
+          </h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            Signed in as {session.name}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => setPasswordDialog(true)}
+            className="h-8 gap-1.5"
+            data-testid="button-change-password"
+          >
+            <KeyRound className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Password</span>
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => logoutMutation.mutate()}
+            className="h-8 gap-1.5 text-muted-foreground"
+            data-testid="button-admin-logout"
+          >
+            <LogOut className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Log out</span>
+          </Button>
+        </div>
       </div>
 
       {/* Member Management */}
@@ -241,7 +419,110 @@ export default function Admin() {
         }}
         isPending={updateCapMutation.isPending}
       />
+
+      {/* Change Password Dialog */}
+      <ChangePasswordDialog
+        open={passwordDialog}
+        onClose={() => setPasswordDialog(false)}
+      />
     </div>
+  );
+}
+
+// CHANGE PASSWORD DIALOG
+function ChangePasswordDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { toast } = useToast();
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+
+  const changeMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/admin/change-password", {
+        currentPassword,
+        newPassword,
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.message || "Failed to change password");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Password changed successfully" });
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      onClose();
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const canSubmit = currentPassword && newPassword && newPassword === confirmPassword && newPassword.length >= 6;
+
+  return (
+    <Dialog open={open} onOpenChange={() => { onClose(); setCurrentPassword(""); setNewPassword(""); setConfirmPassword(""); }}>
+      <DialogContent className="sm:max-w-sm">
+        <DialogHeader>
+          <DialogTitle className="font-serif">Change Password</DialogTitle>
+        </DialogHeader>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (canSubmit) changeMutation.mutate();
+          }}
+          className="space-y-4 mt-2"
+        >
+          <div>
+            <Label htmlFor="current-pw">Current Password</Label>
+            <Input
+              id="current-pw"
+              type="password"
+              value={currentPassword}
+              onChange={(e) => setCurrentPassword(e.target.value)}
+              required
+              data-testid="input-current-password"
+            />
+          </div>
+          <div>
+            <Label htmlFor="new-pw">New Password</Label>
+            <Input
+              id="new-pw"
+              type="password"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              placeholder="At least 6 characters"
+              required
+              data-testid="input-new-password"
+            />
+          </div>
+          <div>
+            <Label htmlFor="confirm-pw">Confirm New Password</Label>
+            <Input
+              id="confirm-pw"
+              type="password"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              required
+              data-testid="input-confirm-password"
+            />
+            {confirmPassword && newPassword !== confirmPassword && (
+              <p className="text-xs text-destructive mt-1">Passwords do not match</p>
+            )}
+          </div>
+          <Button
+            type="submit"
+            className="w-full"
+            disabled={!canSubmit || changeMutation.isPending}
+            data-testid="button-save-password"
+          >
+            {changeMutation.isPending ? "Updating..." : "Update Password"}
+          </Button>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 

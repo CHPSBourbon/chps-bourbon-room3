@@ -1,12 +1,83 @@
-import type { Express } from "express";
+import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
-import { storage } from "./storage";
+import { storage, verifyPassword, hashPassword } from "./storage";
 import { insertMemberSchema, insertEventSchema, insertRsvpSchema } from "@shared/schema";
+
+// Middleware to require admin authentication
+function requireAdmin(req: Request, res: Response, next: NextFunction) {
+  if (!req.session.adminUserId) {
+    return res.status(401).json({ message: "Admin login required" });
+  }
+  next();
+}
 
 export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+
+  // ADMIN AUTH
+  app.post("/api/admin/login", async (req, res) => {
+    const { email, password } = req.body;
+    if (!email || !password) {
+      return res.status(400).json({ message: "Email and password required" });
+    }
+
+    const adminUser = await storage.getAdminUserByEmail(email.toLowerCase().trim());
+    if (!adminUser) {
+      return res.status(401).json({ message: "Invalid email or password" });
+    }
+
+    const valid = await verifyPassword(adminUser.passwordHash, password);
+    if (!valid) {
+      return res.status(401).json({ message: "Invalid email or password" });
+    }
+
+    req.session.adminUserId = adminUser.id;
+    res.json({ id: adminUser.id, email: adminUser.email, name: adminUser.name });
+  });
+
+  app.get("/api/admin/me", async (req, res) => {
+    if (!req.session.adminUserId) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    const adminUser = await storage.getAdminUser(req.session.adminUserId);
+    if (!adminUser) {
+      req.session.destroy(() => {});
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    res.json({ id: adminUser.id, email: adminUser.email, name: adminUser.name });
+  });
+
+  app.post("/api/admin/logout", (req, res) => {
+    req.session.destroy(() => {});
+    res.json({ message: "Logged out" });
+  });
+
+  app.post("/api/admin/change-password", requireAdmin, async (req, res) => {
+    const { currentPassword, newPassword } = req.body;
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ message: "Current and new password required" });
+    }
+    if (newPassword.length < 6) {
+      return res.status(400).json({ message: "New password must be at least 6 characters" });
+    }
+
+    const adminUser = await storage.getAdminUser(req.session.adminUserId!);
+    if (!adminUser) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+
+    const valid = await verifyPassword(adminUser.passwordHash, currentPassword);
+    if (!valid) {
+      return res.status(401).json({ message: "Current password is incorrect" });
+    }
+
+    const newHash = await hashPassword(newPassword);
+    await storage.updateAdminPassword(adminUser.id, newHash);
+    res.json({ message: "Password updated" });
+  });
+
   // MEMBERS
   app.get("/api/members", async (_req, res) => {
     const allMembers = await storage.getAllMembers();
@@ -31,13 +102,15 @@ export async function registerRoutes(
     res.status(201).json(member);
   });
 
-  app.patch("/api/members/:id", async (req, res) => {
+  // Protected: only admins can update members (role changes, edits)
+  app.patch("/api/members/:id", requireAdmin, async (req, res) => {
     const member = await storage.updateMember(Number(req.params.id), req.body);
     if (!member) return res.status(404).json({ message: "Member not found" });
     res.json(member);
   });
 
-  app.delete("/api/members/:id", async (req, res) => {
+  // Protected: only admins can delete members
+  app.delete("/api/members/:id", requireAdmin, async (req, res) => {
     await storage.deleteMember(Number(req.params.id));
     res.status(204).send();
   });
@@ -62,13 +135,15 @@ export async function registerRoutes(
     res.status(201).json(event);
   });
 
-  app.patch("/api/events/:id", async (req, res) => {
+  // Protected: only admins can update events
+  app.patch("/api/events/:id", requireAdmin, async (req, res) => {
     const event = await storage.updateEvent(Number(req.params.id), req.body);
     if (!event) return res.status(404).json({ message: "Event not found" });
     res.json(event);
   });
 
-  app.delete("/api/events/:id", async (req, res) => {
+  // Protected: only admins can delete events
+  app.delete("/api/events/:id", requireAdmin, async (req, res) => {
     await storage.deleteEvent(Number(req.params.id));
     res.status(204).send();
   });

@@ -2,10 +2,27 @@ import {
   type Member, type InsertMember, members,
   type Event, type InsertEvent, events,
   type Rsvp, type InsertRsvp, rsvps,
+  type AdminUser, adminUsers,
 } from "@shared/schema";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import Database from "better-sqlite3";
 import { eq, and } from "drizzle-orm";
+import { scrypt, randomBytes, timingSafeEqual } from "crypto";
+import { promisify } from "util";
+
+const scryptAsync = promisify(scrypt);
+
+export async function hashPassword(password: string): Promise<string> {
+  const salt = randomBytes(16).toString("hex");
+  const buf = (await scryptAsync(password, salt, 64)) as Buffer;
+  return `${buf.toString("hex")}.${salt}`;
+}
+
+export async function verifyPassword(stored: string, supplied: string): Promise<boolean> {
+  const [hashed, salt] = stored.split(".");
+  const buf = (await scryptAsync(supplied, salt, 64)) as Buffer;
+  return timingSafeEqual(Buffer.from(hashed, "hex"), buf);
+}
 
 const dbPath = process.env.DATABASE_PATH || "data.db";
 const sqlite = new Database(dbPath);
@@ -42,6 +59,12 @@ sqlite.exec(`
     member_id INTEGER NOT NULL,
     status TEXT NOT NULL DEFAULT 'going'
   );
+  CREATE TABLE IF NOT EXISTS admin_users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    name TEXT NOT NULL
+  );
 `);
 
 export const db = drizzle(sqlite);
@@ -67,6 +90,12 @@ export interface IStorage {
   getRsvpForMember(eventId: number, memberId: number): Promise<Rsvp | undefined>;
   createOrUpdateRsvp(rsvp: InsertRsvp): Promise<Rsvp>;
   deleteRsvp(eventId: number, memberId: number): Promise<void>;
+
+  // Admin Users
+  getAdminUserByEmail(email: string): Promise<AdminUser | undefined>;
+  getAdminUser(id: number): Promise<AdminUser | undefined>;
+  updateAdminPassword(id: number, passwordHash: string): Promise<void>;
+  createAdminUser(email: string, passwordHash: string, name: string): Promise<AdminUser>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -140,6 +169,44 @@ export class DatabaseStorage implements IStorage {
   async deleteRsvp(eventId: number, memberId: number): Promise<void> {
     db.delete(rsvps).where(and(eq(rsvps.eventId, eventId), eq(rsvps.memberId, memberId))).run();
   }
+
+  // Admin Users
+  async getAdminUserByEmail(email: string): Promise<AdminUser | undefined> {
+    return db.select().from(adminUsers).where(eq(adminUsers.email, email)).get();
+  }
+
+  async getAdminUser(id: number): Promise<AdminUser | undefined> {
+    return db.select().from(adminUsers).where(eq(adminUsers.id, id)).get();
+  }
+
+  async updateAdminPassword(id: number, passwordHash: string): Promise<void> {
+    db.update(adminUsers).set({ passwordHash }).where(eq(adminUsers.id, id)).run();
+  }
+
+  async createAdminUser(email: string, passwordHash: string, name: string): Promise<AdminUser> {
+    return db.insert(adminUsers).values({ email, passwordHash, name }).returning().get();
+  }
 }
 
 export const storage = new DatabaseStorage();
+
+// Seed admin accounts on startup
+async function seedAdminUsers() {
+  const admins = [
+    { email: "drew@palmettostarconstruction.com", name: "Drew" },
+    { email: "william@coastalhavenins.com", name: "William" },
+    { email: "travers@coastalhavenins.com", name: "Travers" },
+    { email: "coley@coastalhavenins.com", name: "Coley" },
+  ];
+
+  for (const admin of admins) {
+    const existing = await storage.getAdminUserByEmail(admin.email);
+    if (!existing) {
+      const hash = await hashPassword("password123");
+      await storage.createAdminUser(admin.email, hash, admin.name);
+      console.log(`Seeded admin: ${admin.email}`);
+    }
+  }
+}
+
+seedAdminUsers().catch(console.error);

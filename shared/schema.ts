@@ -46,6 +46,13 @@ export const insertEventSchema = createInsertSchema(events).omit({ id: true }).e
   time: z.string().min(1, "Time is required"),
 });
 
+export const adminUsers = sqliteTable("admin_users", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  email: text("email").notNull().unique(),
+  passwordHash: text("password_hash").notNull(),
+  name: text("name").notNull(),
+});
+
 export const insertRsvpSchema = createInsertSchema(rsvps).omit({ id: true });
 
 export type InsertMember = z.infer<typeof insertMemberSchema>;
@@ -54,3 +61,4 @@ export type InsertEvent = z.infer<typeof insertEventSchema>;
 export type Event = typeof events.$inferSelect;
 export type InsertRsvp = z.infer<typeof insertRsvpSchema>;
 export type Rsvp = typeof rsvps.$inferSelect;
+export type AdminUser = typeof adminUsers.$inferSelect;
