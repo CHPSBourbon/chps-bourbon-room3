@@ -652,8 +652,19 @@ function AdminEventCard({
     queryKey: ["/api/events", event.id, "rsvps"],
   });
 
-  const goingCount = rsvps.filter((r) => r.status === "going").length;
+  const totalGoing = rsvps
+    .filter((r) => r.status === "going")
+    .reduce((sum, r) => sum + 1 + (r.bringingGuest || 0), 0);
   const waitlistCount = rsvps.filter((r) => r.status === "waitlist").length;
+
+  // Format time to 12h
+  const formatTime12h = (t: string) => {
+    const [h, m] = t.split(":");
+    const hour = parseInt(h, 10);
+    const ampm = hour >= 12 ? "PM" : "AM";
+    const hour12 = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour;
+    return `${hour12}:${m} ${ampm} EST`;
+  };
 
   return (
     <Card className="bg-card border-card-border" data-testid={`admin-event-${event.id}`}>
@@ -663,7 +674,7 @@ function AdminEventCard({
             <p className="text-sm font-medium">{event.title}</p>
             {event.maxAttendees ? (
               <Badge variant="secondary" className="text-[10px] px-1.5 py-0 h-4">
-                {goingCount}/{event.maxAttendees} spots
+                {totalGoing}/{event.maxAttendees} spots
               </Badge>
             ) : (
               <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 text-muted-foreground">
@@ -677,7 +688,7 @@ function AdminEventCard({
             )}
           </div>
           <p className="text-xs text-muted-foreground">
-            {event.date} at {event.time} — {event.location}
+            {event.date} at {formatTime12h(event.time)} — {event.location}
           </p>
         </div>
         <div className="flex items-center gap-1">
@@ -753,7 +764,9 @@ function CapEditorDialog({
     enabled: !!event,
   });
 
-  const goingCount = rsvps.filter((r) => r.status === "going").length;
+  const totalGoing = rsvps
+    .filter((r) => r.status === "going")
+    .reduce((sum, r) => sum + 1 + (r.bringingGuest || 0), 0);
   const waitlistCount = rsvps.filter((r) => r.status === "waitlist").length;
 
   return (
@@ -763,9 +776,9 @@ function CapEditorDialog({
           <DialogTitle className="font-serif">Capacity: {event?.title}</DialogTitle>
         </DialogHeader>
         <div className="space-y-4 mt-2">
-          {(goingCount > 0 || waitlistCount > 0) && (
+          {(totalGoing > 0 || waitlistCount > 0) && (
             <div className="flex items-center gap-3 text-xs text-muted-foreground">
-              {goingCount > 0 && <span>{goingCount} going</span>}
+              {totalGoing > 0 && <span>{totalGoing} going (incl. guests)</span>}
               {waitlistCount > 0 && <span className="text-amber-400">{waitlistCount} waitlisted</span>}
             </div>
           )}
@@ -795,9 +808,9 @@ function CapEditorDialog({
                 placeholder="20"
                 data-testid="input-edit-cap-value"
               />
-              {capValue && Number(capValue) < goingCount && (
+              {capValue && Number(capValue) < totalGoing && (
                 <p className="text-xs text-amber-400 mt-1">
-                  {goingCount} members are already going. Lowering the cap won't remove them but will prevent new RSVPs.
+                  {totalGoing} people are already going (incl. guests). Lowering the cap won't remove them but will prevent new RSVPs.
                 </p>
               )}
             </div>

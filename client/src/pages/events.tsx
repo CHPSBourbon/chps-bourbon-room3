@@ -5,12 +5,22 @@ import type { Event as ClubEvent, Member, Rsvp } from "@shared/schema";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { useAuthContext } from "@/App";
-import { MapPin, Clock, Users, Wine, CalendarDays, Check, HelpCircle, AlertCircle } from "lucide-react";
+import { MapPin, Clock, Users, Wine, CalendarDays, Check, HelpCircle, AlertCircle, UserPlus } from "lucide-react";
 import { format, parseISO, isAfter, isBefore } from "date-fns";
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
+
+function formatTime12h(time24: string): string {
+  const [h, m] = time24.split(":");
+  const hour = parseInt(h, 10);
+  const ampm = hour >= 12 ? "PM" : "AM";
+  const hour12 = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour;
+  return `${hour12}:${m} ${ampm} EST`;
+}
 
 export default function Events() {
   const { toast } = useToast();
@@ -25,11 +35,11 @@ export default function Events() {
   });
 
   const rsvpMutation = useMutation({
-    mutationFn: async ({ eventId, status }: { eventId: number; status: string }) => {
+    mutationFn: async ({ eventId, status, bringingGuest }: { eventId: number; status: string; bringingGuest?: boolean }) => {
       const res = await fetch(`${API_BASE}/api/events/${eventId}/rsvps`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status }),
+        body: JSON.stringify({ status, bringingGuest }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => null);
@@ -127,7 +137,8 @@ export default function Events() {
                 event={event}
                 members={members}
                 currentMemberId={auth.member?.id}
-                onRsvp={auth.member ? (status) => rsvpMutation.mutate({ eventId: event.id, status }) : undefined}
+                isLoggedIn={!!auth.member}
+                onRsvp={auth.member ? (status, bringingGuest) => rsvpMutation.mutate({ eventId: event.id, status, bringingGuest }) : undefined}
                 onCancel={auth.member ? () => cancelRsvpMutation.mutate(event.id) : undefined}
                 rsvpPending={rsvpMutation.isPending}
                 cancelPending={cancelRsvpMutation.isPending}
@@ -145,7 +156,7 @@ export default function Events() {
           </h2>
           <div className="space-y-3 opacity-70">
             {past.map((event) => (
-              <EventCard key={event.id} event={event} members={members} isPast />
+              <EventCard key={event.id} event={event} members={members} isPast isLoggedIn={!!auth.member} />
             ))}
           </div>
         </div>
@@ -158,6 +169,7 @@ function EventCard({
   event,
   members,
   isPast,
+  isLoggedIn,
   currentMemberId,
   onRsvp,
   onCancel,
@@ -167,30 +179,54 @@ function EventCard({
   event: ClubEvent;
   members: Member[];
   isPast?: boolean;
+  isLoggedIn?: boolean;
   currentMemberId?: number;
-  onRsvp?: (status: string) => void;
+  onRsvp?: (status: string, bringingGuest?: boolean) => void;
   onCancel?: () => void;
   rsvpPending?: boolean;
   cancelPending?: boolean;
 }) {
+  const [wantsGuest, setWantsGuest] = useState(false);
+
   const { data: rsvps = [] } = useQuery<Rsvp[]>({
     queryKey: ["/api/events", event.id, "rsvps"],
   });
 
-  const goingCount = rsvps.filter((r) => r.status === "going").length;
+  // Count total going including guests
+  const goingRsvps = rsvps.filter((r) => r.status === "going");
+  const totalGoing = goingRsvps.reduce((sum, r) => sum + 1 + (r.bringingGuest || 0), 0);
   const maybeCount = rsvps.filter((r) => r.status === "maybe").length;
   const waitlistCount = rsvps.filter((r) => r.status === "waitlist").length;
-  const isFull = event.maxAttendees ? goingCount >= event.maxAttendees : false;
-  const spotsLeft = event.maxAttendees ? Math.max(0, event.maxAttendees - goingCount) : null;
+  const isFull = event.maxAttendees ? totalGoing >= event.maxAttendees : false;
+  const spotsLeft = event.maxAttendees ? Math.max(0, event.maxAttendees - totalGoing) : null;
 
   // Current user's RSVP status
   const myRsvp = currentMemberId ? rsvps.find((r) => r.memberId === currentMemberId) : null;
 
-  // Get names of going members
-  const goingMembers = rsvps
-    .filter((r) => r.status === "going")
-    .map((r) => members.find((m) => m.id === r.memberId)?.name)
-    .filter(Boolean);
+  // Initialize guest toggle based on existing RSVP
+  const myBringingGuest = myRsvp?.bringingGuest === 1;
+
+  // Get names of going members (visible only to logged-in users)
+  const memberMap = new Map(members.map((m) => [m.id, m]));
+  const goingMembers = goingRsvps
+    .map((r) => {
+      const name = memberMap.get(r.memberId)?.name;
+      return name ? (r.bringingGuest ? `${name} (+1)` : name) : null;
+    })
+    .filter(Boolean) as string[];
+
+  const maybeMembers = rsvps
+    .filter((r) => r.status === "maybe")
+    .map((r) => memberMap.get(r.memberId)?.name)
+    .filter(Boolean) as string[];
+
+  const waitlistMembers = rsvps
+    .filter((r) => r.status === "waitlist")
+    .map((r) => {
+      const name = memberMap.get(r.memberId)?.name;
+      return name ? (r.bringingGuest ? `${name} (+1)` : name) : null;
+    })
+    .filter(Boolean) as string[];
 
   return (
     <Card className="bg-card border-card-border" data-testid={`card-event-${event.id}`}>
@@ -222,7 +258,7 @@ function EventCard({
               )}
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2">
                 <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                  <Clock className="w-3 h-3" /> {event.time}
+                  <Clock className="w-3 h-3" /> {formatTime12h(event.time)}
                 </span>
                 <span className="flex items-center gap-1 text-xs text-muted-foreground">
                   <MapPin className="w-3 h-3" /> {event.location}
@@ -234,11 +270,11 @@ function EventCard({
                 )}
               </div>
               <div className="flex items-center gap-3 mt-2">
-                {goingCount > 0 && (
+                {totalGoing > 0 && (
                   <span className="flex items-center gap-1 text-xs">
                     <Check className="w-3 h-3 text-green-500" />
                     <span className="text-muted-foreground">
-                      {goingCount} going{event.maxAttendees ? `/${event.maxAttendees}` : ""}
+                      {totalGoing} going{event.maxAttendees ? `/${event.maxAttendees}` : ""}
                     </span>
                   </span>
                 )}
@@ -260,18 +296,36 @@ function EventCard({
                   </span>
                 )}
               </div>
-              {/* Show who's going */}
-              {goingMembers.length > 0 && (
-                <p className="text-[11px] text-muted-foreground/70 mt-1.5">
-                  {goingMembers.slice(0, 5).join(", ")}
-                  {goingMembers.length > 5 ? ` +${goingMembers.length - 5} more` : ""}
-                </p>
+
+              {/* RSVP attendee names — only visible to logged-in members */}
+              {isLoggedIn && (
+                <div className="mt-2 space-y-0.5">
+                  {goingMembers.length > 0 && (
+                    <p className="text-[11px] text-muted-foreground/70" data-testid={`text-going-names-${event.id}`}>
+                      <span className="text-green-500/70">Going:</span>{" "}
+                      {goingMembers.slice(0, 8).join(", ")}
+                      {goingMembers.length > 8 ? ` +${goingMembers.length - 8} more` : ""}
+                    </p>
+                  )}
+                  {maybeMembers.length > 0 && (
+                    <p className="text-[11px] text-muted-foreground/70">
+                      <span className="text-yellow-500/70">Maybe:</span>{" "}
+                      {maybeMembers.slice(0, 8).join(", ")}
+                    </p>
+                  )}
+                  {waitlistMembers.length > 0 && (
+                    <p className="text-[11px] text-muted-foreground/70">
+                      <span className="text-amber-400/70">Waitlist:</span>{" "}
+                      {waitlistMembers.slice(0, 8).join(", ")}
+                    </p>
+                  )}
+                </div>
               )}
             </div>
           </div>
           {/* RSVP buttons — only shown if logged in */}
           {!isPast && onRsvp && (
-            <div className="flex flex-col gap-1.5 flex-shrink-0">
+            <div className="flex flex-col gap-1.5 flex-shrink-0 min-w-[90px]">
               {myRsvp ? (
                 <>
                   <Badge
@@ -279,6 +333,7 @@ function EventCard({
                     className={`text-[10px] justify-center ${myRsvp.status === "waitlist" ? "bg-amber-500/15 text-amber-400 border-0" : ""}`}
                   >
                     {myRsvp.status === "going" ? "Going" : myRsvp.status === "maybe" ? "Maybe" : myRsvp.status === "waitlist" ? "Waitlisted" : myRsvp.status}
+                    {myBringingGuest ? " (+1)" : ""}
                   </Badge>
                   <Button
                     size="sm"
@@ -293,11 +348,24 @@ function EventCard({
                 </>
               ) : (
                 <>
+                  {/* Guest toggle */}
+                  <div className="flex items-center gap-1.5 mb-1" data-testid={`guest-toggle-${event.id}`}>
+                    <Switch
+                      id={`guest-${event.id}`}
+                      checked={wantsGuest}
+                      onCheckedChange={setWantsGuest}
+                      className="scale-75 origin-left"
+                      data-testid={`switch-guest-${event.id}`}
+                    />
+                    <Label htmlFor={`guest-${event.id}`} className="text-[10px] text-muted-foreground flex items-center gap-0.5 cursor-pointer">
+                      <UserPlus className="w-3 h-3" /> +1 Guest
+                    </Label>
+                  </div>
                   <Button
                     size="sm"
                     variant="default"
                     className="h-8"
-                    onClick={() => onRsvp("going")}
+                    onClick={() => onRsvp("going", wantsGuest)}
                     disabled={rsvpPending}
                     data-testid={`button-rsvp-going-${event.id}`}
                   >

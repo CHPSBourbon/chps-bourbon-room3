@@ -33,6 +33,7 @@ export const rsvps = sqliteTable("rsvps", {
   eventId: integer("event_id").notNull(),
   memberId: integer("member_id").notNull(),
   status: text("status").notNull().default("going"),
+  bringingGuest: integer("bringing_guest").notNull().default(0), // 0 or 1
 });
 
 export const adminUsers = sqliteTable("admin_users", {

@@ -144,7 +144,7 @@ export default function Dashboard() {
                     <div>
                       <p className="font-medium text-sm">{event.title}</p>
                       <p className="text-xs text-muted-foreground mt-0.5">
-                        {event.time} at {event.location}
+                        {(() => { const [h, m] = event.time.split(":"); const hr = parseInt(h,10); return `${hr===0?12:hr>12?hr-12:hr}:${m} ${hr>=12?"PM":"AM"} EST`; })()} at {event.location}
                       </p>
                     </div>
                   </div>

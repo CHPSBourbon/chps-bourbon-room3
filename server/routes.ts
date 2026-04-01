@@ -2,6 +2,7 @@ import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage, verifyPassword, hashPassword } from "./storage";
 import { insertMemberSchema, insertEventSchema, insertRsvpSchema } from "@shared/schema";
+import { notifyNewEvent, notifyEventCancelled } from "./email";
 
 const AVATAR_COLORS = ["#C8A951", "#8B6914", "#D4A76A", "#B8860B", "#A0522D", "#CD853F", "#DAA520", "#BC8F8F"];
 
@@ -231,6 +232,8 @@ export async function registerRoutes(
     if (!parsed.success) return res.status(400).json({ message: parsed.error.message });
 
     const event = await storage.createEvent(parsed.data);
+    // Send email notification to all members
+    notifyNewEvent(event).catch(console.error);
     res.status(201).json(event);
   });
 
@@ -243,7 +246,10 @@ export async function registerRoutes(
 
   // Protected: only admins can delete events
   app.delete("/api/events/:id", requireAdmin, async (req, res) => {
+    const event = await storage.getEvent(Number(req.params.id));
     await storage.deleteEvent(Number(req.params.id));
+    // Send cancellation email to all members
+    if (event) notifyEventCancelled(event).catch(console.error);
     res.status(204).send();
   });
 
@@ -258,11 +264,12 @@ export async function registerRoutes(
   app.post("/api/events/:eventId/rsvps", requireMember, async (req, res) => {
     const eventId = Number(req.params.eventId);
     const memberId = req.session.memberId!;
-    const { status } = req.body;
+    const { status, bringingGuest } = req.body;
 
     if (!status) return res.status(400).json({ message: "Status required" });
 
-    const rsvpData = { eventId, memberId, status };
+    const guestCount = bringingGuest ? 1 : 0;
+    const rsvpData = { eventId, memberId, status, bringingGuest: guestCount };
 
     // Check capacity if member is trying to RSVP as "going"
     if (status === "going") {
@@ -270,9 +277,15 @@ export async function registerRoutes(
       if (event && event.maxAttendees) {
         const allRsvps = await storage.getRsvpsForEvent(eventId);
         const existing = allRsvps.find(r => r.memberId === memberId);
-        const goingCount = allRsvps.filter(r => r.status === "going").length;
+        // Count total going (members + their guests)
+        const totalGoing = allRsvps
+          .filter(r => r.status === "going")
+          .reduce((sum, r) => sum + 1 + (r.bringingGuest || 0), 0);
+        // Subtract existing member's current slot if updating
+        const currentSlots = existing && existing.status === "going" ? 1 + (existing.bringingGuest || 0) : 0;
+        const slotsNeeded = 1 + guestCount;
 
-        if ((!existing || existing.status !== "going") && goingCount >= event.maxAttendees) {
+        if ((totalGoing - currentSlots + slotsNeeded) > event.maxAttendees) {
           const rsvp = await storage.createOrUpdateRsvp({
             ...rsvpData,
             status: "waitlist",
@@ -296,24 +309,31 @@ export async function registerRoutes(
 
     await storage.deleteRsvp(eventId, memberId);
 
-    // Auto-promote from waitlist
+    // Auto-promote from waitlist (accounting for guests)
     if (wasGoing) {
       const event = await storage.getEvent(eventId);
       if (event && event.maxAttendees) {
         const allRsvps = await storage.getRsvpsForEvent(eventId);
-        const goingCount = allRsvps.filter(r => r.status === "going").length;
+        const totalGoing = allRsvps
+          .filter(r => r.status === "going")
+          .reduce((sum, r) => sum + 1 + (r.bringingGuest || 0), 0);
 
-        if (goingCount < event.maxAttendees) {
+        if (totalGoing < event.maxAttendees) {
           const waitlisted = allRsvps
             .filter(r => r.status === "waitlist")
             .sort((a, b) => a.id - b.id);
 
           if (waitlisted.length > 0) {
-            await storage.createOrUpdateRsvp({
-              eventId,
-              memberId: waitlisted[0].memberId,
-              status: "going",
-            });
+            const next = waitlisted[0];
+            const slotsNeeded = 1 + (next.bringingGuest || 0);
+            if (totalGoing + slotsNeeded <= event.maxAttendees) {
+              await storage.createOrUpdateRsvp({
+                eventId,
+                memberId: next.memberId,
+                status: "going",
+                bringingGuest: next.bringingGuest || 0,
+              });
+            }
           }
         }
       }

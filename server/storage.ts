@@ -75,6 +75,13 @@ try {
   // Column already exists
 }
 
+// Migration: add bringing_guest column to rsvps
+try {
+  sqlite.exec(`ALTER TABLE rsvps ADD COLUMN bringing_guest INTEGER NOT NULL DEFAULT 0`);
+} catch {
+  // Column already exists
+}
+
 export const db = drizzle(sqlite);
 
 export interface IStorage {
@@ -169,9 +176,9 @@ export class DatabaseStorage implements IStorage {
   async createOrUpdateRsvp(rsvp: InsertRsvp): Promise<Rsvp> {
     const existing = await this.getRsvpForMember(rsvp.eventId, rsvp.memberId);
     if (existing) {
-      return db.update(rsvps).set({ status: rsvp.status }).where(eq(rsvps.id, existing.id)).returning().get()!;
+      return db.update(rsvps).set({ status: rsvp.status, bringingGuest: rsvp.bringingGuest ?? 0 }).where(eq(rsvps.id, existing.id)).returning().get()!;
     }
-    return db.insert(rsvps).values(rsvp).returning().get();
+    return db.insert(rsvps).values({ ...rsvp, bringingGuest: rsvp.bringingGuest ?? 0 }).returning().get();
   }
 
   async deleteRsvp(eventId: number, memberId: number): Promise<void> {
